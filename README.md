@@ -8,7 +8,6 @@ and then embeds these into the bootstrap ELF.
 
 ## Cloning
 ```
-# Clone repository and submodules
 git clone https://github.com/ultraembedded/riscv-linux-boot.git
 ```
 
