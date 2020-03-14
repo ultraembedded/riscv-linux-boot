@@ -103,4 +103,27 @@ int serial_getchar(void)
     else
         return -1;
 }
+//-------------------------------------------------------------
+// serial_putstr_hex: Print string with hex number appended
+//-------------------------------------------------------------
+void serial_putstr_hex(const char *str, uint32_t num)
+{
+    char* num_str;
+    char outbuf[32];
+    const char digits[] = "0123456789abcdef";
 
+    while (str && *str)
+        serial_putchar(*str++);
+
+    num_str = &outbuf[sizeof(outbuf)-1];
+    *num_str-- = 0;
+    *num_str = '\n';
+    do
+    {
+        *(--num_str) = digits[(int)(num % 16)];
+    }
+    while ((num /= 16) > 0);
+
+    while (*num_str)
+        serial_putchar(*num_str++);
+}

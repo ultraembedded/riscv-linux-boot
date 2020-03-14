@@ -137,6 +137,6 @@ bss_clear:
 #####################################################
 .global _exit
 _exit:
-    csrw dscratch, x0
+    csrw 0x8b2, x0
 _exit_loop:
     jal _exit_loop

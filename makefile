@@ -1,24 +1,28 @@
 ###############################################################################
 # Variables: System specific options
 ###############################################################################
+# Linux image
+VMLINUX ?=
+ifeq ($(VMLINUX),)
+  ${error VMLINUX must be specified}
+endif
+DTS_FILE ?=
+ifeq ($(DTS_FILE),)
+  ${error DTS_FILE must be specified}
+endif
+LINUX_DIR ?=
+ifeq ($(LINUX_DIR),)
+  ${error LINUX_DIR must be specified (LINUX kernel source tree base)}
+endif
 
 # Toolchain path/prefix
 TOOLCHAIN_PREFIX ?= riscv32-unknown-elf-
-
-# Linux build path (containing vmlinux ELF)
-LINUX_DIR   ?= ../riscv-linux
-
-# DTS file to use
-DTS_FILE    ?= ../dts/riscv_soc.dts
 
 ###############################################################################
 # Variables: Safe defaults (no changes required)
 ###############################################################################
 # Target name
 ELF_NAME    ?= riscv-linux-boot.elf
-
-# VMLINUX ELF
-VMLINUX     ?= $(LINUX_DIR)/vmlinux
 
 # VMLINUX Binary
 PAYLOAD     ?= vmlinux.bin

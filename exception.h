@@ -2,6 +2,7 @@
 #define __EXCEPTION_H__
 
 #include <stdint.h>
+#include "csr.h"
 
 //-----------------------------------------------------------------
 // Defines:
@@ -41,11 +42,15 @@ struct irq_context
 };
 
 typedef struct irq_context *(*fp_exception)(struct irq_context *ctx);
+typedef struct irq_context *(*fp_irq)(struct irq_context *ctx);
+typedef struct irq_context *(*fp_syscall)(struct irq_context *ctx);
 
 //-----------------------------------------------------------------
 // Prototypes:
 //-----------------------------------------------------------------
 struct irq_context * exception_handler(struct irq_context *ctx);
+void                 exception_set_irq_handler(fp_irq irq_handler);
+void                 exception_set_syscall_handler(fp_syscall syscall_handler);
 void                 exception_set_handler(int cause, fp_exception handler);
 extern void          _exit(int arg);
 

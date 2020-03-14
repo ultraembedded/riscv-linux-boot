@@ -1,43 +1,70 @@
-#include <stdint.h>
 #include "csr.h"
 #include "exception.h"
-#include "syscalls.h"
+#include "sbi.h"
+#include "emulation.h"
 #include "serial.h"
+
+#ifndef CONFIG_UARTLITE_BASE
+#define CONFIG_UARTLITE_BASE 0x92000000
+#endif
 
 //-----------------------------------------------------------------
 // Defines:
 //-----------------------------------------------------------------
-#define SERIAL_BASE        0x92000000
+#define MSTATUS_MPP_SHIFT   11
+#define PRV_S 1
+#define PRV_M 3
 
 //-----------------------------------------------------------------
-// Globals:
+// Defines:
 //-----------------------------------------------------------------
+extern uint32_t _sp;
 extern uint32_t _payload_start;
 extern uint32_t _dtb_start;
-extern uint32_t _sp;
 
 //-----------------------------------------------------------------
-// main:
+// irqctrl_handler: Interrupt handler
 //-----------------------------------------------------------------
-int main(void)
+static struct irq_context * irq_callback(struct irq_context *ctx)
 {
-    uint32_t entry_addr = (uint32_t)&_payload_start;
-    uint32_t dtb_addr   = (uint32_t)&_dtb_start;   
+    uint32_t cause = ctx->cause & 0xF;
 
-    // Setup serial port
-    serial_init(SERIAL_BASE, 0 /* NOT USED */);
-    serial_putstr("Booting...\n");
+    if (cause == IRQ_M_TIMER)
+    {
+        emulation_take_irq();
 
+        // Raise to supervisor
+        csr_set(sip, SR_IP_STIP);
+        csr_clear(mie, SR_IP_MTIP);
+        csr_clear(mip, SR_IP_MTIP);
+    }
+    else
+    {
+        serial_putstr_hex("ERROR: Unhandled IRQ: ", cause);
+        _exit(-1);
+    }
+    return ctx;
+}
+//-----------------------------------------------------------------
+// boot_kernel:
+//-----------------------------------------------------------------
+static int boot_kernel(uint32_t entry_addr, uint32_t dtb_addr)
+{
     // Register fault handlers
-    exception_set_handler(CAUSE_ECALL_S, handle_syscall);
+    exception_set_handler(CAUSE_ECALL_S, sbi_syscall);
 
-    // Boot kernel
-    csr_write(mstatus, PRV_S << MSTATUS_MPP_SHIFT);
+    // Register interrupt handler
+    exception_set_irq_handler(irq_callback);
+
+    // Enable timer IRQ (on return from exception)
+    csr_write(mie, 1 << IRQ_M_TIMER);
+    csr_write(mstatus, (PRV_S << MSTATUS_MPP_SHIFT) | SR_MPIE);
 
     // Configure interrupt / exception delegation
     // Delegate everything except super/machine level syscalls
-    csr_write(medeleg, ~(1 << CAUSE_ECALL_S));
-    csr_write(mideleg, ~0);
+    // and machine timer IRQ
+    csr_write(medeleg, ~((1 << CAUSE_ECALL_S) | (1 << CAUSE_ILLEGAL_INSTRUCTION)));
+    csr_write(mideleg, ~(1 << IRQ_M_TIMER));
 
     // Boot target
     csr_write(mepc, entry_addr);
@@ -52,4 +79,24 @@ int main(void)
 
     return 0;
 }
+//-----------------------------------------------------------------
+// main:
+//-----------------------------------------------------------------
+int main(void)
+{
+    serial_init(CONFIG_UARTLITE_BASE, 0);
 
+    serial_putstr("\n");
+    serial_putstr(" _____  _____  _____  _____   __      __  _      _                    ____              _   \n");
+    serial_putstr("|  __ \\|_   _|/ ____|/ ____|  \\ \\    / / | |    (_)                  |  _ \\            | |  \n");
+    serial_putstr("| |__) | | | | (___ | |   _____\\ \\  / /  | |     _ _ __  _   ___  __ | |_) | ___   ___ | |_ \n");
+    serial_putstr("|  _  /  | |  \\___ \\| |  |______\\ \\/ /   | |    | | '_ \\| | | \\ \\/ / |  _ < / _ \\ / _ \\| __|\n");
+    serial_putstr("| | \\ \\ _| |_ ____) | |____      \\  /    | |____| | | | | |_| |>  <  | |_) | (_) | (_) | |_ \n");
+    serial_putstr("|_|  \\_\\_____|_____/ \\_____|      \\/     |______|_|_| |_|\\__,_/_/\\_\\ |____/ \\___/ \\___/ \\__|\n");
+    serial_putstr("\n");
+
+    emulation_init();
+
+    boot_kernel((uint32_t)&_payload_start, (uint32_t)&_dtb_start);
+    return 0;
+} 

@@ -2,7 +2,7 @@
 #include <stdbool.h>
 #include "csr.h"
 #include "serial.h"
-#include "syscalls.h"
+#include "sbi.h"
 #include "exception.h"
 
 //--------------------------------------------------------------------
@@ -19,9 +19,16 @@
 #define SBI_SHUTDOWN 8
 
 //--------------------------------------------------------------------
-// handle_syscall:
+// set_mtimecmp: Non-std mtimecmp support
 //--------------------------------------------------------------------
-struct irq_context *handle_syscall(struct irq_context *ctx)
+static void set_mtimecmp(uint32_t next)
+{
+    csr_write(0x7c0, next);
+}
+//--------------------------------------------------------------------
+// sbi_syscall:
+//--------------------------------------------------------------------
+struct irq_context *sbi_syscall(struct irq_context *ctx)
 {
     uint32_t a0    = ctx->reg[REG_ARG0 + 0];
     uint32_t a1    = ctx->reg[REG_ARG0 + 1];
@@ -32,7 +39,7 @@ struct irq_context *handle_syscall(struct irq_context *ctx)
     {
         case SBI_SHUTDOWN:
             serial_putstr("Shutdown...\n");
-            _exit(-1);
+            _exit(0);
             break;
         case SBI_CONSOLE_PUTCHAR:
             serial_putchar(a0);
@@ -43,8 +50,16 @@ struct irq_context *handle_syscall(struct irq_context *ctx)
             else
                 ctx->reg[REG_ARG0] = -1;
             break;
+        case SBI_SET_TIMER:
+            set_mtimecmp(a0);
+            csr_set(mie, SR_IP_MTIP);
+            csr_clear(sip, SR_IP_STIP);
+        break;
+        case SBI_REMOTE_FENCE_I:
+        case SBI_REMOTE_SFENCE_VMA:
+            break;
         default:
-            serial_putstr("Unhandled SYSCALL, stopping...\n");
+            serial_putstr("SBI: Unhandled SYSCALL, stopping...\n");
             _exit(-1);
             break;
     }
