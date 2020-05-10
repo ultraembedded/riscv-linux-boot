@@ -3,6 +3,7 @@
 #include "sbi.h"
 #include "emulation.h"
 #include "serial.h"
+#include "assert.h"
 
 #ifndef CONFIG_UARTLITE_BASE
 #define CONFIG_UARTLITE_BASE 0x92000000
@@ -19,9 +20,27 @@
 // Defines:
 //-----------------------------------------------------------------
 extern uint32_t _sp;
+
+#ifdef CONFIG_KERNEL_EMBEDDED
 extern uint32_t _payload_start;
 extern uint32_t _dtb_start;
+#endif
 
+//-----------------------------------------------------------------
+// flash_memcpy: Word copy (rounded up)
+//-----------------------------------------------------------------
+static void flash_memcpy(void *dst, void *src, int length)
+{
+    int words = (length + 3) / 4;
+    uint32_t *pSrc = (uint32_t*)src;
+    uint32_t *pDst = (uint32_t*)dst;
+
+    assert(((uint32_t)pSrc & 3) == 0);
+    assert(((uint32_t)pDst & 3) == 0);
+
+    while (words--)
+        *pDst++ = *pSrc++;
+}
 //-----------------------------------------------------------------
 // irqctrl_handler: Interrupt handler
 //-----------------------------------------------------------------
@@ -97,6 +116,15 @@ int main(void)
 
     emulation_init();
 
+#ifdef CONFIG_KERNEL_EMBEDDED
     boot_kernel((uint32_t)&_payload_start, (uint32_t)&_dtb_start);
+#else
+    serial_putstr("Copying DTB from FLASH to RAM...\n");
+    flash_memcpy(CONFIG_DTB_DST, CONFIG_DTB_SRC, CONFIG_DTB_SIZE);
+    serial_putstr("Copying KERNEL from FLASH to RAM...\n");
+    flash_memcpy(CONFIG_KERNEL_DST, CONFIG_KERNEL_SRC, CONFIG_KERNEL_SIZE);
+    serial_putstr("Booting...\n");
+    boot_kernel(CONFIG_KERNEL_DST, CONFIG_DTB_DST);
+#endif
     return 0;
 } 

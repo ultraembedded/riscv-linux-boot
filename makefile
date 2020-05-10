@@ -18,6 +18,17 @@ endif
 # Toolchain path/prefix
 TOOLCHAIN_PREFIX ?= riscv32-unknown-elf-
 
+# Link kernel / dtb into ELF
+CONFIG_KERNEL_EMBEDDED ?= y
+
+# [if KERNEL_EMBEDDED=n]
+CONFIG_DTB_SRC         ?= 0x88500000
+CONFIG_DTB_DST         ?= 0x82300000
+CONFIG_KERNEL_SRC      ?= 0x88600000
+CONFIG_KERNEL_DST      ?= 0x80400000
+CONFIG_DTB_SIZE        ?= 16384
+CONFIG_KERNEL_SIZE     ?= 6500000
+
 ###############################################################################
 # Variables: Safe defaults (no changes required)
 ###############################################################################
@@ -37,18 +48,35 @@ SRC_DIR      = .
 ELF_DIR     ?=
 OBJ_DIR     ?= $(abspath ./obj)/
 
+
 ###############################################################################
 # Variables: Source files
 ###############################################################################
+ifeq ($(CONFIG_KERNEL_EMBEDDED),y)
 SRC :=   boot.S \
 		 $(foreach src,$(SRC_DIR),$(filter-out $(src)/boot.S, $(wildcard $(src)/*.S))) \
 		 $(foreach src,$(SRC_DIR),$(wildcard $(src)/*.c))
+else
+SRC :=   boot.S \
+		 $(foreach src,$(SRC_DIR),$(wildcard $(src)/*.c))
+endif
 
 ###############################################################################
 # Variables: Compiler Options
 ###############################################################################
-EXTRA_CFLAGS = -DPAYLOAD_BINARY=\"$(PAYLOAD)\"
-EXTRA_CFLAGS+= -DDTB_BINARY=\"$(DTB)\"
+EXTRA_CFLAGS =
+ifeq ($(CONFIG_KERNEL_EMBEDDED),y)
+  EXTRA_CFLAGS+= -DCONFIG_KERNEL_EMBEDDED
+  EXTRA_CFLAGS+= -DPAYLOAD_BINARY=\"$(PAYLOAD)\"
+  EXTRA_CFLAGS+= -DDTB_BINARY=\"$(DTB)\"
+else
+  EXTRA_CFLAGS+= -DCONFIG_DTB_SRC=$(CONFIG_DTB_SRC)
+  EXTRA_CFLAGS+= -DCONFIG_DTB_DST=$(CONFIG_DTB_DST)
+  EXTRA_CFLAGS+= -DCONFIG_DTB_SIZE=$(CONFIG_DTB_SIZE)
+  EXTRA_CFLAGS+= -DCONFIG_KERNEL_SRC=$(CONFIG_KERNEL_SRC)
+  EXTRA_CFLAGS+= -DCONFIG_KERNEL_DST=$(CONFIG_KERNEL_DST)
+  EXTRA_CFLAGS+= -DCONFIG_KERNEL_SIZE=$(CONFIG_KERNEL_SIZE)
+endif
 EXTRA_CFLAGS+= -Wno-unused-variable 
 
 # Options
