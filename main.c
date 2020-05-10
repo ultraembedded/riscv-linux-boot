@@ -82,7 +82,10 @@ static int boot_kernel(uint32_t entry_addr, uint32_t dtb_addr)
     // Configure interrupt / exception delegation
     // Delegate everything except super/machine level syscalls
     // and machine timer IRQ
-    csr_write(medeleg, ~((1 << CAUSE_ECALL_S) | (1 << CAUSE_ILLEGAL_INSTRUCTION)));
+    csr_write(medeleg, ~((1 << CAUSE_ECALL_S) |
+                         (1 << CAUSE_ILLEGAL_INSTRUCTION) |
+                         (1 << CAUSE_MISALIGNED_LOAD) |
+                         (1 << CAUSE_MISALIGNED_STORE)));
     csr_write(mideleg, ~(1 << IRQ_M_TIMER));
 
     // Boot target

@@ -20,11 +20,50 @@ extern void isr_vector(void);
       __typeof__ (b) _b = (b); \
     _a < _b ? _a : _b; })
 
+#define INSN_MATCH_LH           0x1003
+#define INSN_MASK_LH            0x707f
+#define INSN_MATCH_LW           0x2003
+#define INSN_MASK_LW            0x707f
+#define INSN_MATCH_LHU          0x5003
+#define INSN_MASK_LHU           0x707f
+#define INSN_MATCH_LWU          0x6003
+#define INSN_MASK_LWU           0x707f
+#define INSN_MATCH_SH           0x1023
+#define INSN_MASK_SH            0x707f
+#define INSN_MATCH_SW           0x2023
+#define INSN_MASK_SW            0x707f
+
 //-----------------------------------------------------------------
 // Locals
 //-----------------------------------------------------------------
 static uint32_t load_reservation = 0;
 
+//-----------------------------------------------------------------
+// emulation_read_byte: Read byte with fault catching
+//-----------------------------------------------------------------
+static int32_t emulation_read_byte(uint32_t address, uint8_t *data)
+{
+    int32_t result, tmp;
+    int32_t fail;
+    __asm__ __volatile__ (
+        "   li       %[tmp],  0x00020000\n" \
+        "   csrs     mstatus,  %[tmp]\n" \
+        "   la       %[tmp],  1f\n" \
+        "   csrw     mtvec,  %[tmp]\n" \
+        "   li       %[fail], 1\n" \
+        "   lbu      %[result], 0(%[address])\n"
+        "   li       %[fail], 0\n" \
+        "1:\n" \
+        "   li       %[tmp],  0x00020000\n" \
+        "   csrc     mstatus,  %[tmp]\n" \
+        : [result]"=&r" (result), [fail]"=&r" (fail), [tmp]"=&r" (tmp)
+        : [address]"r" (address)
+        : "memory"
+    );
+
+    *data = result;
+    return fail;
+}
 //-----------------------------------------------------------------
 // emulation_read_word: Read word with fault catching
 //-----------------------------------------------------------------
@@ -49,6 +88,30 @@ static int32_t emulation_read_word(uint32_t address, int32_t *data)
     );
 
     *data = result;
+    return fail;
+}
+//-----------------------------------------------------------------
+// emulation_write_byte: Write byte with fault catching
+//-----------------------------------------------------------------
+static int32_t emulation_write_byte(uint32_t address, uint8_t data)
+{
+    int32_t tmp;
+    int32_t fail;
+    __asm__ __volatile__ (
+        "   li       %[tmp],  0x00020000\n" \
+        "   csrs     mstatus,  %[tmp]\n" \
+        "   la       %[tmp],  1f\n" \
+        "   csrw     mtvec,  %[tmp]\n" \
+        "   li       %[fail], 1\n" \
+        "   sb       %[data], 0(%[address])\n"
+        "   li       %[fail], 0\n" \
+        "1:\n" \
+        "   li       %[tmp],  0x00020000\n" \
+        "   csrc     mstatus,  %[tmp]\n" \
+        : [fail]"=&r" (fail), [tmp]"=&r" (tmp)
+        : [address]"r" (address), [data]"r" (data)
+        : "memory"
+    );
     return fail;
 }
 //-----------------------------------------------------------------
@@ -210,11 +273,129 @@ static struct irq_context *trap_invalid_inst(struct irq_context *ctx)
     return ctx;
 }
 //-----------------------------------------------------------------
+// trap_misaligned_ld: Unaligned load handler
+//-----------------------------------------------------------------
+static struct irq_context *trap_misaligned_ld(struct irq_context *ctx)
+{
+    uint32_t mepc    = ctx->pc;
+    uint32_t mstatus = ctx->status;
+    uint32_t instr   = 0;
+    uint32_t addr    = csr_read(0x343); // mbadaddr or mtval
+    uint32_t data    = 0;
+    int32_t  opcode  = 0;
+    uint32_t rd      = 0;
+    int      len     = 0;
+    int      i;
+
+    // Load instruction as mtval contains load / store address
+    if (emulation_read_word(mepc, &opcode))
+    {
+        // Load fault - stop and redirect to supervisor
+        emulation_trap_to_supervisor(ctx, mepc, mstatus);
+        return ctx;
+    }
+    instr = opcode;
+    rd    = (instr >> 7)  & 0x1f;
+
+    if ((instr & INSN_MASK_LW) == INSN_MATCH_LW || (instr & INSN_MASK_LWU) == INSN_MATCH_LWU)
+        len = 4;
+    else if ((instr & INSN_MASK_LH) == INSN_MATCH_LH || (instr & INSN_MASK_LHU) == INSN_MATCH_LHU)
+        len = 2;
+    else
+    {
+        emulation_trap_to_supervisor(ctx, mepc, mstatus);
+        return ctx;
+    }
+
+    for (i = 0; i < len; i++)
+    {
+        uint8_t data_read;
+        if (emulation_read_byte(addr + i, &data_read))
+        {
+            // Load fault - stop and redirect to supervisor
+            emulation_trap_to_supervisor(ctx, mepc, mstatus);
+            return ctx;
+        }
+        data |= ((uint32_t)data_read) << (8 * i);
+    }
+
+    // Sign extend LH
+    if (((instr & INSN_MASK_LH) == INSN_MATCH_LH) && (data & 0x8000))
+        data |= 0xFFFF0000;
+
+    // Write back to target
+    if (rd != 0)
+        ctx->reg[rd] = data;
+
+    // Skip faulting instruction
+    ctx->pc += 4;
+
+    // Force MTVEC back to default handler
+    csr_write(mtvec, isr_vector);
+    return ctx;
+}
+//-----------------------------------------------------------------
+// trap_misaligned_st: Unaligned store handler
+//-----------------------------------------------------------------
+static struct irq_context *trap_misaligned_st(struct irq_context *ctx)
+{
+    uint32_t mepc    = ctx->pc;
+    uint32_t mstatus = ctx->status;
+    uint32_t instr   = 0;
+    uint32_t addr    = csr_read(0x343); // mbadaddr or mtval
+    uint32_t data    = 0;
+    int32_t  opcode  = 0;
+    uint32_t rs2     = 0;
+    uint32_t rs2_val = 0;
+    int      len     = 0;
+    int      i;
+
+    // Load instruction as mtval contains load / store address
+    if (emulation_read_word(mepc, &opcode))
+    {
+        // Load fault - stop and redirect to supervisor
+        emulation_trap_to_supervisor(ctx, mepc, mstatus);
+        return ctx;
+    }
+    instr   = opcode;
+    rs2     = (instr >> 20)  & 0x1f;
+    rs2_val = (rs2 != 0) ? ctx->reg[rs2] : 0;
+
+    if ((instr & INSN_MASK_SW) == INSN_MATCH_SW)
+        len = 4;
+    else if ((instr & INSN_MASK_SH) == INSN_MATCH_SH)
+        len = 2;
+    else
+    {
+        emulation_trap_to_supervisor(ctx, mepc, mstatus);
+        return ctx;
+    }
+
+    for (i = 0; i < len; i++)
+    {
+        if (emulation_write_byte(addr + i, rs2_val >> (8 * i)))
+        {
+            // Store fault - stop and redirect to supervisor
+            emulation_trap_to_supervisor(ctx, mepc, mstatus);
+            return ctx;
+        }        
+    }
+
+    // Skip faulting instruction
+    ctx->pc += 4;
+
+    // Force MTVEC back to default handler
+    csr_write(mtvec, isr_vector);
+    return ctx;
+}
+//-----------------------------------------------------------------
 // emulation_init: Configure emulation
 //-----------------------------------------------------------------
 void emulation_init(void)
 {
     exception_set_handler(CAUSE_ILLEGAL_INSTRUCTION, trap_invalid_inst);
+    exception_set_handler(CAUSE_MISALIGNED_LOAD,     trap_misaligned_ld);
+    exception_set_handler(CAUSE_MISALIGNED_STORE,    trap_misaligned_st);
 }
 //-----------------------------------------------------------------
 // emulation_take_irq: On interrupt, clear load reservation
